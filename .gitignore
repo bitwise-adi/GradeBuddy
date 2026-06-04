@@ -39,3 +39,12 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# scraper debug files
+*-debug.html
+*-debug.json
+cie-page-fetched.html
+courses-debug.json
+otp-failed.html
+dashboard-debug.html
+otp-page-debug.html
