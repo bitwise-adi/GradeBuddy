@@ -179,60 +179,115 @@ export async function loginAndFetchMarks(
     const creditsMap = new Map<string, { credits: number; nature: string }>();
 
     try {
-      console.log('[Scraper] Fetching registration details...');
+      console.log('[Scraper] Fetching registration details via in-browser fetch...');
 
-      // Click the Registration Details link
-      const regClicked = await page.evaluate(() => {
-        const links = Array.from(document.querySelectorAll('a'));
-        const regLink = links.find(a =>
-          a.textContent?.includes('Registration Details') ||
-          a.href?.includes('getcoursedetails') ||
-          a.href?.includes('showreg')
-        );
-        if (regLink) {
-          regLink.click();
-          return true;
+      // Use in-browser fetch to get registration page (maintains session cookies automatically)
+      const regResult = await page.evaluate(async (loginUrl: string) => {
+        try {
+          const res = await fetch(
+            `${loginUrl}?option=com_studentdashboard&controller=studentdashboard&task=getcoursedetails`,
+            { credentials: 'same-origin' }
+          );
+          return await res.text();
+        } catch {
+          return '';
         }
-        return false;
-      });
+      }, LOGIN_URL);
 
-      if (regClicked) {
-        await page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 15000 }).catch(() => {});
-        await new Promise(resolve => setTimeout(resolve, 1000));
+      if (regResult && !regResult.includes('Login to Your Account')) {
+        const reg$ = cheerio.load(regResult);
+        reg$('table tr').each(function () {
+          const cells = reg$(this).find('td');
+          if (cells.length >= 4) {
+            const courseCode = reg$(cells.eq(0)).text().trim();
+            const credits = parseFloat(reg$(cells.eq(2)).text().trim()) || 0;
+            const nature = reg$(cells.eq(3)).text().trim();
 
-        const regHtml = await page.content();
-        if (!regHtml.includes('Login to Your Account')) {
-          const reg$ = cheerio.load(regHtml);
-          reg$('table tr').each(function () {
-            const cells = reg$(this).find('td');
-            if (cells.length >= 4) {
-              const courseCode = reg$(cells.eq(0)).text().trim();
-              const credits = parseFloat(reg$(cells.eq(2)).text().trim()) || 0;
-              const nature = reg$(cells.eq(3)).text().trim();
-
-              if (courseCode && /^[A-Z]/.test(courseCode)) {
-                creditsMap.set(courseCode, { credits, nature });
-              }
+            if (courseCode && /^[A-Z]/.test(courseCode)) {
+              creditsMap.set(courseCode, { credits, nature });
             }
-          });
-          console.log(`[Scraper] Found credits for ${creditsMap.size} courses`);
-        }
-
-        // Navigate back to dashboard
-        await page.goBack({ waitUntil: 'networkidle0', timeout: 10000 }).catch(() => {});
+          }
+        });
+        console.log(`[Scraper] Found credits for ${creditsMap.size} courses`);
       }
     } catch (err) {
       console.log('[Scraper] Could not fetch registration details:', err instanceof Error ? err.message : err);
     }
 
-    // ========== STEP 5: FETCH CIE MARKS FOR EACH COURSE ==========
+    // ========== STEP 5: FETCH CIE MARKS (IN-BROWSER FETCH — FAST & RELIABLE) ==========
     const courses: Course[] = [];
 
+    // Build full URLs for all CIE links
+    const cieUrls = courseEntries.map(entry => {
+      if (!entry.cieHref) return '';
+      return entry.cieHref.startsWith('http')
+        ? entry.cieHref
+        : `${BASE_URL}/${entry.cieHref}`;
+    });
+
+    console.log(`[Scraper] Fetching CIE marks for ${courseEntries.length} courses via in-browser fetch...`);
+
+    // Fetch all CIE pages from within the browser (uses session cookies automatically)
+    // Process in batches of 3 to avoid overwhelming the server
+    const batchSize = 3;
+    const cieResults: string[] = new Array(courseEntries.length).fill('');
+
+    for (let batchStart = 0; batchStart < courseEntries.length; batchStart += batchSize) {
+      const batchEnd = Math.min(batchStart + batchSize, courseEntries.length);
+      const batchUrls = cieUrls.slice(batchStart, batchEnd);
+      const batchIndices = Array.from({ length: batchEnd - batchStart }, (_, i) => batchStart + i);
+
+      console.log(`[Scraper] Batch ${Math.floor(batchStart / batchSize) + 1}: courses ${batchStart + 1}-${batchEnd}...`);
+
+      const batchResults = await page.evaluate(async (urls: string[]) => {
+        const results: string[] = [];
+        const promises = urls.map(async (url) => {
+          if (!url) return '';
+          try {
+            const res = await fetch(url, { credentials: 'same-origin' });
+            return await res.text();
+          } catch {
+            return '';
+          }
+        });
+        return Promise.all(promises);
+      }, batchUrls);
+
+      // Retry failed ones individually
+      for (let i = 0; i < batchResults.length; i++) {
+        const globalIdx = batchIndices[i];
+        if (batchResults[i] && !batchResults[i].includes('Login to Your Account')) {
+          cieResults[globalIdx] = batchResults[i];
+        } else if (cieUrls[globalIdx]) {
+          // Retry once
+          console.log(`  Retrying ${courseEntries[globalIdx].code}...`);
+          const retry = await page.evaluate(async (url: string) => {
+            try {
+              const res = await fetch(url, { credentials: 'same-origin' });
+              return await res.text();
+            } catch {
+              return '';
+            }
+          }, cieUrls[globalIdx]);
+
+          if (retry && !retry.includes('Login to Your Account')) {
+            cieResults[globalIdx] = retry;
+          }
+        }
+      }
+    }
+
+    // Parse all CIE results
     for (let i = 0; i < courseEntries.length; i++) {
       const entry = courseEntries[i];
+      const cieHtml = cieResults[i];
 
-      if (!entry.cieHref) {
-        // No CIE link — add course with 0 marks
+      if (cieHtml) {
+        const cieData = parseCIEPage(cieHtml, entry.code, entry.name, creditsMap);
+        courses.push(cieData);
+        console.log(`  [${entry.code}] CIE: ${cieData.cieMarks}/${cieData.cieMax}, Attendance: ${cieData.attendance}%`);
+      } else {
+        // No data — add course with 0 marks
         const regInfo = creditsMap.get(entry.code);
         courses.push({
           courseCode: entry.code,
@@ -245,77 +300,7 @@ export async function loginAndFetchMarks(
           attendance: null,
           hasSEE: (regInfo?.credits ?? 0) > 0,
         });
-        continue;
-      }
-
-      console.log(`[Scraper] Fetching CIE ${i + 1}/${courseEntries.length}: ${entry.code}...`);
-
-      // Retry logic for navigation timeouts
-      let success = false;
-      for (let attempt = 0; attempt < 2 && !success; attempt++) {
-        try {
-          const fullHref = entry.cieHref.startsWith('http')
-            ? entry.cieHref
-            : `${BASE_URL}/${entry.cieHref}`;
-
-          // Click the CIE link within the page context
-          await Promise.all([
-            page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 15000 }),
-            page.evaluate((linkHref) => {
-              const link = document.querySelector(`a[href="${linkHref}"]`) ||
-                Array.from(document.querySelectorAll('a')).find(a => a.href === linkHref);
-              if (link) {
-                (link as HTMLAnchorElement).click();
-              } else {
-                window.location.href = linkHref;
-              }
-            }, attempt === 0 ? entry.cieHref : fullHref),
-          ]);
-
-          const cieHtml = await page.content();
-
-          if (cieHtml.includes('Login to Your Account')) {
-            console.log(`  [${entry.code}] Session expired`);
-            break;
-          }
-
-          // Parse CIE data from the page
-          const cieData = parseCIEPage(cieHtml, entry.code, entry.name, creditsMap);
-          courses.push(cieData);
-          success = true;
-
-          console.log(`  [${entry.code}] CIE: ${cieData.cieMarks}/${cieData.cieMax}, Attendance: ${cieData.attendance}%`);
-
-          // Navigate back to dashboard for the next course
-          await page.goBack({ waitUntil: 'networkidle0', timeout: 10000 }).catch(async () => {
-            // If goBack fails, try navigating to dashboard directly
-            if (page) {
-              await page.goto(
-                `${LOGIN_URL}?option=com_studentdashboard&controller=studentdashboard&task=dashboard`,
-                { waitUntil: 'networkidle0', timeout: 10000 }
-              ).catch(() => {});
-            }
-          });
-
-        } catch (err) {
-          console.log(`  [${entry.code}] Attempt ${attempt + 1} failed:`, err instanceof Error ? err.message : err);
-
-          if (attempt === 1) {
-            // After retries, add course with 0 marks
-            const regInfo = creditsMap.get(entry.code);
-            courses.push({
-              courseCode: entry.code,
-              courseName: entry.name,
-              credits: regInfo?.credits ?? 0,
-              nature: regInfo?.nature ?? 'Core',
-              cieMarks: 0,
-              cieMax: 100,
-              components: [],
-              attendance: null,
-              hasSEE: (regInfo?.credits ?? 0) > 0,
-            });
-          }
-        }
+        console.log(`  [${entry.code}] Failed to fetch CIE data`);
       }
     }
 
