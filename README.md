@@ -1,36 +1,89 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 🎓 GradeBuddy
 
-## Getting Started
+GradeBuddy is a modern, fast, and student-friendly dashboard built to track grades, calculate GPA, and monitor attendance securely. 
 
-First, run the development server:
+This branch (**`portal-fetch`**) contains the **Full Automated Scraping** version. It connects directly to the Contineo student portal, bypassing complex reCAPTCHAs, to automatically fetch your CIE marks, registration details, and attendance.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+![GradeBuddy Dashboard Concept](https://img.shields.io/badge/GradeBuddy-Dashboard-blue?style=for-the-badge&logo=next.js)
+![React](https://img.shields.io/badge/react-%2320232a.svg?style=for-the-badge&logo=react&logoColor=%2361DAFB)
+![Next.js](https://img.shields.io/badge/Next-black?style=for-the-badge&logo=next.js&logoColor=white)
+![Puppeteer](https://img.shields.io/badge/Puppeteer-40B5A4?style=for-the-badge&logo=Puppeteer&logoColor=white)
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+---
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## ✨ Features
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- **🚀 One-Click Fetching**: Just enter your USN and DOB. GradeBuddy automatically logs into the portal and fetches your data.
+- **🤖 Built-in reCAPTCHA Bypass**: Uses Puppeteer (headless Chromium) to generate native tokens, bypassing the portal's strict reCAPTCHA v3 verification during OTP submission.
+- **⚡ Blazing Fast Extraction**: Uses in-browser `fetch()` calls executed in parallel batches to extract CIE marks and attendance in ~15 seconds instead of traditional sequential scraping.
+- **📊 Beautiful Dashboard**: A premium, dark-mode focused UI that visualizes attendance, marks, and SGPA calculations.
+- **🔒 Privacy First**: Your credentials are only used temporarily for the scraping session and are never stored on any database.
+- **📝 Manual Mode Fallback**: Users can choose to enter their marks manually without providing portal credentials.
 
-## Learn More
+---
 
-To learn more about Next.js, take a look at the following resources:
+## 🏗️ Architecture & How It Works
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+GradeBuddy's `portal-fetch` branch operates using a hybrid server-side scraping approach:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+1. **Authentication (Puppeteer)**: The Next.js API spins up a headless Chromium instance to navigate the login flow and naturally execute the portal's reCAPTCHA scripts, guaranteeing a valid session token.
+2. **Data Extraction (In-Browser Fetch)**: Once authenticated, the browser instance executes parallel `fetch` requests using its active cookie jar to gather course registrations (credits/nature) and individual CIE marks.
+3. **Session Closure**: After data is bundled into a clean JSON response, the browser instance is destroyed to save memory.
+4. **State Management**: The React frontend receives the data and stores it in `sessionStorage` for snappy, persistent navigation without re-fetching.
 
-## Deploy on Vercel
+---
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## 🛠️ Local Development
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+To run GradeBuddy locally, you need Node.js installed.
+
+1. **Clone the repository and switch to the `portal-fetch` branch**:
+   ```bash
+   git clone https://github.com/bitwise-adi/GradeBuddy.git
+   cd GradeBuddy
+   git checkout portal-fetch
+   ```
+
+2. **Install dependencies**:
+   ```bash
+   npm install
+   ```
+   *(Note: This will download a local version of Chromium for Puppeteer)*
+
+3. **Start the development server**:
+   ```bash
+   npm run dev
+   ```
+
+4. **Open the App**:
+   Visit [http://localhost:3000](http://localhost:3000) in your browser.
+
+---
+
+## 🚀 Deployment
+
+Because this branch uses Puppeteer, it requires a host that supports Docker/Container deployments (it **cannot** be deployed on Vercel).
+
+We recommend **Render.com** (or Railway).
+
+### Deploying to Render
+1. Create a **New Web Service** on Render.
+2. Connect this GitHub repository and select the **`portal-fetch`** branch.
+3. Change the **Language/Runtime** to **Docker**.
+4. Set the **Region** to **Singapore** (closest to the portal servers for lower latency).
+5. Deploy using the **Free Instance Type**.
+
+*The included `Dockerfile` is pre-configured to install system-level Chromium dependencies and map them correctly for Puppeteer.*
+
+---
+
+## 🌿 Branching Strategy
+
+- **`portal-fetch` (Default/Main)**: The complete app including the server-side Puppeteer scraper. Requires Docker to deploy.
+- **`master`**: A lightweight, purely frontend version where users must manually enter their marks. Deployed on Vercel.
+
+---
+
+## 📄 Disclaimer
+
+GradeBuddy is an independent project built to improve the student experience. It is not affiliated with, maintained, or endorsed by the institute or Contineo. User data is not collected or stored.
