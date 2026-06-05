@@ -49,7 +49,7 @@ export default function LoginForm({ onManualEntry }: LoginFormProps) {
   const verificationTypes = [
     { value: 'father', label: "Father's Phone (Last 4 digits)" },
     { value: 'mother', label: "Mother's Phone (Last 4 digits)" },
-    { value: 'apaar', label: 'APAAR ID (Last 4 digits)' },
+    { value: 'guardian', label: "Guardian's Phone (Last 4 digits)" },
   ];
 
   const handleOtpChange = useCallback((index: number, value: string) => {

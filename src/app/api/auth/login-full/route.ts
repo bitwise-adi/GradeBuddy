@@ -13,7 +13,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    console.log('[API /login-full] Starting Puppeteer login...');
+    console.log('[API /login-full] Starting Puppeteer login for USN:', usn);
 
     const result = await loginAndFetchMarks(
       usn,

@@ -1,16 +1,26 @@
 import puppeteer, { Browser, Page } from 'puppeteer';
+import * as cheerio from 'cheerio';
 import { Course, StudentProfile, CIEComponent } from './types';
 
-const BASE_URL = 'https://parents.nie.ac.in/parentsodd';
+// ==============================
+// Puppeteer-based Portal Scraper
+// ==============================
+
+const BASE_URL = 'https://parents.nie.ac.in';
 const LOGIN_URL = `${BASE_URL}/index.php`;
 
 let browser: Browser | null = null;
 
 async function getBrowser(): Promise<Browser> {
-  if (!browser) {
+  if (!browser || !browser.connected) {
     browser = await puppeteer.launch({
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+      ],
     });
   }
   return browser;
@@ -24,7 +34,9 @@ export async function closeBrowser() {
 }
 
 /**
- * Complete login flow using Puppeteer (handles reCAPTCHA)
+ * Complete login + marks fetch flow using Puppeteer.
+ * Puppeteer is required because the OTP page uses reCAPTCHA v3
+ * which needs a real browser to generate tokens.
  */
 export async function loginAndFetchMarks(
   usn: string,
@@ -37,311 +49,374 @@ export async function loginAndFetchMarks(
   let page: Page | null = null;
 
   try {
-    const browser = await getBrowser();
-    page = await browser.newPage();
+    const b = await getBrowser();
+    page = await b.newPage();
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
-    // Navigate to login page
-    console.log('[Puppeteer] Navigating to login page...');
-    await page.goto(LOGIN_URL, { waitUntil: 'networkidle0' });
+    // ========== STEP 1: LOGIN ==========
+    console.log('[Scraper] Navigating to login page...');
+    await page.goto(LOGIN_URL, { waitUntil: 'networkidle0', timeout: 30000 });
 
-    // Wait for form to load
-    await page.waitForSelector('form', { timeout: 10000 });
+    // Fill USN
+    const usnInput = await page.$('input[name="username"]');
+    if (!usnInput) throw new Error('Could not find USN input field');
+    await usnInput.evaluate((el: HTMLInputElement, v: string) => { el.value = v; }, usn.toUpperCase());
 
-    // Fill in USN - try multiple possible selectors
-    const usnFilled = await page.evaluate((usn) => {
-      const selectors = [
-        'input[name="username"]',
-        'input[placeholder="USN"]',
-        'input#username',
-        'input.uk-input[type="text"]'
-      ];
-      
-      for (const selector of selectors) {
-        const input = document.querySelector(selector);
-        if (input && input instanceof HTMLInputElement) {
-          input.value = usn;
-          return true;
-        }
-      }
-      return false;
-    }, usn);
-
-    if (!usnFilled) {
-      throw new Error('Could not find USN input field');
-    }
-
-    // Fill in DOB - select elements
+    // Fill DOB
     await page.select('select[name="dd"]', dobDay.padStart(2, '0'));
     await page.select('select[name="mm"]', dobMonth.padStart(2, '0'));
     await page.select('select[name="yyyy"]', dobYear);
 
-    // Submit login form (this will trigger reCAPTCHA and redirect to OTP page)
-    console.log('[Puppeteer] Submitting login form...');
+    // Submit login (calls the portal's own submitLogin() which handles password obfuscation)
+    console.log('[Scraper] Submitting login form...');
     await Promise.all([
-      page.waitForNavigation({ waitUntil: 'networkidle0' }),
-      page.click('input[type="submit"]'),
+      page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 15000 }),
+      page.evaluate(() => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (typeof (window as any).submitLogin === 'function') {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (window as any).submitLogin();
+        } else {
+          (document.getElementById('login-form') as HTMLFormElement)?.submit();
+        }
+      }),
     ]);
 
-    // Check if we're on OTP page
+    // Check if we landed on OTP page
     const pageContent = await page.content();
-    if (!pageContent.includes('Select Verification Type')) {
-      return {
-        success: false,
-        message: 'Login failed. Could not reach OTP page.',
-      };
+    if (pageContent.includes('Login Failed') || pageContent.includes('invalid username')) {
+      return { success: false, message: 'Invalid USN or Date of Birth.' };
     }
 
-    console.log('[Puppeteer] On OTP page, filling verification form...');
+    if (!pageContent.includes('combineDigits') && !pageContent.includes('Select Verification Type')) {
+      return { success: false, message: 'Unexpected page after login. Could not reach OTP verification.' };
+    }
 
-    // Map verification type
+    // ========== STEP 2: OTP VERIFICATION ==========
+    console.log('[Scraper] On OTP page, filling verification...');
+
+    // Map verification type to numeric ID
     const idTypeMap: Record<string, string> = {
       'father': '1',
       'mother': '2',
+      'guardian': '5',
       'apaar': '5',
     };
     const idType = idTypeMap[verificationType] || '1';
 
-    // Select verification type
     await page.select('select[name="idType"]', idType);
 
-    // Fill in the 4 digits
+    // Fill digit inputs
     const digitInputs = await page.$$('.digit-input');
+    if (digitInputs.length < 4) {
+      return { success: false, message: 'Could not find digit input fields on OTP page.' };
+    }
+
     for (let i = 0; i < 4 && i < digitInputs.length; i++) {
+      await digitInputs[i].click();
       await digitInputs[i].type(digits[i]);
     }
 
+    // Wait for reCAPTCHA v3 token to be generated (runs automatically on page load)
+    await new Promise(resolve => setTimeout(resolve, 3000));
+
+    // Call combineDigits() to populate the hidden enteredid field
+    await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (typeof (window as any).combineDigits === 'function') {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (window as any).combineDigits();
+      }
+    });
+
     // Submit OTP form
-    console.log('[Puppeteer] Submitting OTP form...');
+    console.log('[Scraper] Submitting OTP form...');
     await Promise.all([
-      page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 10000 }),
+      page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 15000 }),
       page.click('input[type="submit"]'),
     ]);
 
-    // Check if login was successful by looking for the actual dashboard elements
-    const dashboardContent = await page.content();
-    
-    // Look for logout button or navigation menu which appears after successful login
-    const isLoggedIn = dashboardContent.includes('LOGOUT') || 
-                       dashboardContent.includes('HOME') && dashboardContent.includes('PROCTORSHIP') ||
-                       dashboardContent.includes('Last Updated On');
-    
-    if (!isLoggedIn || dashboardContent.includes('Login to Your Account') || dashboardContent.includes('Login Failed')) {
-      // Save the failed page for debugging
-      if (typeof process !== 'undefined') {
-        const fs = await import('fs');
-        fs.writeFileSync('puppeteer-login-failed.html', dashboardContent);
-      }
-      
-      return {
-        success: false,
-        message: 'OTP verification failed. Please check your verification digits.',
-      };
+    // Check if login succeeded
+    const currentUrl = page.url();
+    const dashHtml = await page.content();
+
+    if (!currentUrl.includes('dashboard') || dashHtml.includes('Login to Your Account')) {
+      return { success: false, message: 'OTP verification failed. Please check your verification digits.' };
     }
 
-    console.log('[Puppeteer] Successfully logged in! Dashboard loaded.');
+    console.log('[Scraper] Successfully logged in!');
 
-    // Extract and log cookies to ensure session is maintained
-    const cookies = await page.cookies();
-    console.log('[Puppeteer] Session has', cookies.length, 'cookies');
+    // ========== STEP 3: EXTRACT DASHBOARD DATA ==========
+    const $ = cheerio.load(dashHtml);
 
-    // Wait a bit for any JavaScript to finish
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    // Extract course list from the dashboard table
+    const courseEntries: Array<{ code: string; name: string; cieHref: string }> = [];
 
-    // Navigate to Student Registration to get credits
-    console.log('[Puppeteer] Fetching course registration...');
-    
-    // Try clicking the REGISTRATION menu link instead of direct navigation
-    const registrationClicked = await page.evaluate(() => {
-      const links = Array.from(document.querySelectorAll('a'));
-      const regLink = links.find(a => a.textContent?.includes('REGISTRATION') || a.href?.includes('showreg'));
-      if (regLink) {
-        regLink.click();
-        return true;
-      }
-      return false;
-    });
+    $('table tr').each(function () {
+      const cells = $(this).find('td');
+      if (cells.length >= 3) {
+        const code = $(cells.eq(0)).text().trim();
+        const name = $(cells.eq(1)).text().trim();
 
-    if (registrationClicked) {
-      console.log('[Puppeteer] Clicked REGISTRATION link');
-      await page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 10000 }).catch(() => {});
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    } else {
-      // Fallback to direct navigation
-      console.log('[Puppeteer] REGISTRATION link not found, navigating directly');
-      const regUrl = `${LOGIN_URL}?option=com_studentdashboard&controller=studentdashboard&task=showreg`;
-      await page.goto(regUrl, { waitUntil: 'networkidle0' });
-    }
+        if (code && /^[A-Z0-9]/.test(code) && code.length > 3) {
+          // Find CIE link in this row
+          const cieLink = $(this).find('a').filter(function () {
+            return $(this).attr('href')?.includes('ciedetails') || false;
+          }).attr('href');
 
-    const creditsMap = new Map<string, { credits: number; nature: string }>();
-    const regHtml = await page.content();
-    
-    // Save for debugging
-    if (typeof process !== 'undefined') {
-      const fs = await import('fs');
-      fs.writeFileSync('puppeteer-registration.html', regHtml);
-      console.log('[Puppeteer] Saved registration page for debugging');
-    }
-    
-    // Parse registration data (simplified - would need actual selectors)
-    // For now, we'll extract from tables
-    const registrationData = await page.$$eval('table tr', rows => {
-      return rows.slice(1).map(row => {
-        const cells = row.querySelectorAll('td');
-        if (cells.length >= 4) {
-          return {
-            code: cells[0]?.textContent?.trim() || '',
-            credits: parseFloat(cells[2]?.textContent?.trim() || '0'),
-            nature: cells[3]?.textContent?.trim() || 'Core',
-          };
+          courseEntries.push({
+            code,
+            name,
+            cieHref: cieLink || '',
+          });
         }
-        return null;
-      }).filter(Boolean);
-    });
-
-    registrationData.forEach((data: any) => {
-      if (data && data.code) {
-        creditsMap.set(data.code, { credits: data.credits, nature: data.nature });
       }
     });
 
-    console.log('[Puppeteer] Found', creditsMap.size, 'courses in registration');
+    console.log(`[Scraper] Found ${courseEntries.length} courses on dashboard`);
 
-    // Navigate to CIE page
-    console.log('[Puppeteer] Fetching CIE marks...');
-    const cieUrl = `${LOGIN_URL}?option=com_studentdashboard&controller=studentdashboard&task=showcie`;
-    await page.goto(cieUrl, { waitUntil: 'networkidle0' });
+    // ========== STEP 4: FETCH REGISTRATION DETAILS (for credits) ==========
+    const creditsMap = new Map<string, { credits: number; nature: string }>();
 
-    // Save for debugging
-    const cieHtml = await page.content();
-    if (typeof process !== 'undefined') {
-      const fs = await import('fs');
-      fs.writeFileSync('puppeteer-cie-page.html', cieHtml);
-      console.log('[Puppeteer] Saved CIE page for debugging');
+    try {
+      console.log('[Scraper] Fetching registration details...');
+
+      // Click the Registration Details link
+      const regClicked = await page.evaluate(() => {
+        const links = Array.from(document.querySelectorAll('a'));
+        const regLink = links.find(a =>
+          a.textContent?.includes('Registration Details') ||
+          a.href?.includes('getcoursedetails') ||
+          a.href?.includes('showreg')
+        );
+        if (regLink) {
+          regLink.click();
+          return true;
+        }
+        return false;
+      });
+
+      if (regClicked) {
+        await page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 15000 }).catch(() => {});
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        const regHtml = await page.content();
+        if (!regHtml.includes('Login to Your Account')) {
+          const reg$ = cheerio.load(regHtml);
+          reg$('table tr').each(function () {
+            const cells = reg$(this).find('td');
+            if (cells.length >= 4) {
+              const courseCode = reg$(cells.eq(0)).text().trim();
+              const credits = parseFloat(reg$(cells.eq(2)).text().trim()) || 0;
+              const nature = reg$(cells.eq(3)).text().trim();
+
+              if (courseCode && /^[A-Z]/.test(courseCode)) {
+                creditsMap.set(courseCode, { credits, nature });
+              }
+            }
+          });
+          console.log(`[Scraper] Found credits for ${creditsMap.size} courses`);
+        }
+
+        // Navigate back to dashboard
+        await page.goBack({ waitUntil: 'networkidle0', timeout: 10000 }).catch(() => {});
+      }
+    } catch (err) {
+      console.log('[Scraper] Could not fetch registration details:', err instanceof Error ? err.message : err);
     }
 
-    // Wait for course tabs to load
-    await page.waitForSelector('[role="tab"], .nav-tabs a, a[href^="#"]', { timeout: 5000 }).catch(() => null);
-
+    // ========== STEP 5: FETCH CIE MARKS FOR EACH COURSE ==========
     const courses: Course[] = [];
 
-    // Get all course tabs
-    const courseTabs = await page.$$('[role="tab"], .nav-tabs a, a[href^="#course"]');
-    console.log('[Puppeteer] Found', courseTabs.length, 'course tabs');
+    for (let i = 0; i < courseEntries.length; i++) {
+      const entry = courseEntries[i];
 
-    for (const tab of courseTabs) {
-      // Click the tab
-      await tab.click();
-      await new Promise(resolve => setTimeout(resolve, 500)); // Wait for content to load
-
-      // Get course code from tab
-      const courseCode = await tab.evaluate(el => el.textContent?.trim() || '');
-      if (!courseCode || !/^[A-Z]/.test(courseCode)) continue;
-
-      console.log('[Puppeteer] Processing course:', courseCode);
-
-      // Get the active tab panel content
-      const panelContent = await page.$eval('[role="tabpanel"].active, .tab-pane.active', el => el.textContent || '').catch(() => '');
-
-      // Extract CIE marks
-      const cieMatch = panelContent.match(/(?:FINAL\s+CIE\s+MARKS?\s+OBTAINED|Current\s+CIE)\s*[:=]\s*(\d+)(?:\s*\/\s*(\d+))?/i);
-      const cieMarks = cieMatch ? parseInt(cieMatch[1]) : 0;
-      const cieMax = cieMatch && cieMatch[2] ? parseInt(cieMatch[2]) : 100;
-
-      // Extract attendance
-      const attMatch = panelContent.match(/ATTENDANCE\s*[:=]\s*(\d+(?:\.\d+)?)\s*%/i);
-      const attendance = attMatch ? parseFloat(attMatch[1]) : null;
-
-      // Extract component breakdown
-      const components: CIEComponent[] = [];
-      const componentPattern = /(T\d|Q\d|IL\d|EL\d|CIE\d)\s*[:=]\s*(\d+|-)\s*(?:\/\s*(\d+))?/gi;
-      let match;
-      while ((match = componentPattern.exec(panelContent)) !== null) {
-        components.push({
-          name: match[1],
-          marksObtained: match[2] === '-' ? null : parseInt(match[2]),
-          maxMarks: match[3] ? parseInt(match[3]) : null,
+      if (!entry.cieHref) {
+        // No CIE link — add course with 0 marks
+        const regInfo = creditsMap.get(entry.code);
+        courses.push({
+          courseCode: entry.code,
+          courseName: entry.name,
+          credits: regInfo?.credits ?? 0,
+          nature: regInfo?.nature ?? 'Core',
+          cieMarks: 0,
+          cieMax: 100,
+          components: [],
+          attendance: null,
+          hasSEE: (regInfo?.credits ?? 0) > 0,
         });
+        continue;
       }
 
-      const regInfo = creditsMap.get(courseCode);
-      const credits = regInfo?.credits ?? 0;
+      console.log(`[Scraper] Fetching CIE ${i + 1}/${courseEntries.length}: ${entry.code}...`);
 
-      courses.push({
-        courseCode,
-        courseName: '', // Will get from table
-        credits,
-        nature: regInfo?.nature ?? 'Core',
-        cieMarks,
-        cieMax,
-        components,
-        attendance,
-        hasSEE: credits > 0,
-      });
-    }
+      // Retry logic for navigation timeouts
+      let success = false;
+      for (let attempt = 0; attempt < 2 && !success; attempt++) {
+        try {
+          const fullHref = entry.cieHref.startsWith('http')
+            ? entry.cieHref
+            : `${BASE_URL}/${entry.cieHref}`;
 
-    // Try to get course names from the main table
-    try {
-      const courseNames = await page.$$eval('table tr', rows => {
-        return rows.slice(1).map(row => {
-          const cells = row.querySelectorAll('td');
-          if (cells.length >= 2) {
-            return {
-              code: cells[0]?.textContent?.trim() || '',
-              name: cells[1]?.textContent?.trim() || '',
-            };
+          // Click the CIE link within the page context
+          await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 15000 }),
+            page.evaluate((linkHref) => {
+              const link = document.querySelector(`a[href="${linkHref}"]`) ||
+                Array.from(document.querySelectorAll('a')).find(a => a.href === linkHref);
+              if (link) {
+                (link as HTMLAnchorElement).click();
+              } else {
+                window.location.href = linkHref;
+              }
+            }, attempt === 0 ? entry.cieHref : fullHref),
+          ]);
+
+          const cieHtml = await page.content();
+
+          if (cieHtml.includes('Login to Your Account')) {
+            console.log(`  [${entry.code}] Session expired`);
+            break;
           }
-          return null;
-        }).filter(Boolean);
-      });
 
-      courseNames.forEach((data: any) => {
-        const course = courses.find(c => c.courseCode === data.code);
-        if (course && data.name) {
-          course.courseName = data.name;
+          // Parse CIE data from the page
+          const cieData = parseCIEPage(cieHtml, entry.code, entry.name, creditsMap);
+          courses.push(cieData);
+          success = true;
+
+          console.log(`  [${entry.code}] CIE: ${cieData.cieMarks}/${cieData.cieMax}, Attendance: ${cieData.attendance}%`);
+
+          // Navigate back to dashboard for the next course
+          await page.goBack({ waitUntil: 'networkidle0', timeout: 10000 }).catch(async () => {
+            // If goBack fails, try navigating to dashboard directly
+            if (page) {
+              await page.goto(
+                `${LOGIN_URL}?option=com_studentdashboard&controller=studentdashboard&task=dashboard`,
+                { waitUntil: 'networkidle0', timeout: 10000 }
+              ).catch(() => {});
+            }
+          });
+
+        } catch (err) {
+          console.log(`  [${entry.code}] Attempt ${attempt + 1} failed:`, err instanceof Error ? err.message : err);
+
+          if (attempt === 1) {
+            // After retries, add course with 0 marks
+            const regInfo = creditsMap.get(entry.code);
+            courses.push({
+              courseCode: entry.code,
+              courseName: entry.name,
+              credits: regInfo?.credits ?? 0,
+              nature: regInfo?.nature ?? 'Core',
+              cieMarks: 0,
+              cieMax: 100,
+              components: [],
+              attendance: null,
+              hasSEE: (regInfo?.credits ?? 0) > 0,
+            });
+          }
         }
-      });
-    } catch (e) {
-      console.log('[Puppeteer] Could not extract course names');
+      }
     }
 
-    // Extract student profile
+    // Build profile
     const profile: StudentProfile = {
-      name: 'Student',
-      usn,
+      name: '', // Portal shows proctor name, not student name
+      usn: usn.toUpperCase(),
       branch: '',
       semester: '',
       section: '',
     };
 
-    // Try to get profile info from page
-    try {
-      const profileText = await page.$eval('body', el => el.textContent || '');
-      const nameMatch = profileText.match(/([A-Z][A-Z\s]+)\s+(?:B\.?E|M\.?Tech)/);
-      if (nameMatch) profile.name = nameMatch[1].trim();
+    // Try to extract semester info from dashboard
+    const bodyText = $('body').text();
+    const semMatch = bodyText.match(/SEM\s*(\d+)/i) || bodyText.match(/Semester\s*:\s*(\d+)/i);
+    if (semMatch) profile.semester = `SEM ${semMatch[1]}`;
 
-      const semMatch = profileText.match(/SEM\s*(\d+)/i);
-      if (semMatch) profile.semester = `SEM ${semMatch[1]}`;
-    } catch (e) {
-      console.log('[Puppeteer] Could not extract profile');
-    }
-
-    console.log('[Puppeteer] Successfully fetched', courses.length, 'courses');
+    console.log(`[Scraper] Successfully fetched ${courses.length} courses`);
 
     return {
       success: true,
-      message: 'Marks fetched successfully.',
+      message: `Fetched ${courses.length} courses successfully.`,
       profile,
       courses,
     };
+
   } catch (error) {
-    console.error('[Puppeteer] Error:', error);
+    console.error('[Scraper] Error:', error);
     return {
       success: false,
       message: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
     };
   } finally {
     if (page) {
-      await page.close();
+      await page.close().catch(() => {});
     }
   }
+}
+
+/**
+ * Parse a CIE details page to extract marks, attendance, and components.
+ *
+ * The CIE page has tables in this format:
+ *   Table 0 (marks): "T1 : - | T2 : - | Q1 : - | Q2 : - | IL1 : - | Current CIE : 85/100 | ATTENDANCE : 86%"
+ *   Table 1 (chart): course name repeated
+ *   Table 2 (chart): course name repeated
+ */
+function parseCIEPage(
+  html: string,
+  courseCode: string,
+  courseName: string,
+  creditsMap: Map<string, { credits: number; nature: string }>
+): Course {
+  const $ = cheerio.load(html);
+  const pageText = $('body').text();
+
+  // Extract CIE marks: "Current CIE : XX" or "Current CIE : XX/YY"
+  const cieMatch = pageText.match(/Current\s+CIE\s*:\s*(\d+)(?:\s*\/\s*(\d+))?/i);
+  const cieMarks = cieMatch ? parseInt(cieMatch[1]) : 0;
+  const cieMax = cieMatch && cieMatch[2] ? parseInt(cieMatch[2]) : 100;
+
+  // Extract attendance: "ATTENDANCE : XX%"
+  const attMatch = pageText.match(/ATTENDANCE\s*:\s*(\d+(?:\.\d+)?)\s*%/i);
+  const attendance = attMatch ? parseFloat(attMatch[1]) : null;
+
+  // Extract component breakdown from the marks table (Table 0)
+  const components: CIEComponent[] = [];
+  const componentPattern = /([A-Za-z]+\d*)\s*:\s*(\d+|Abscent|-)/g;
+  let match;
+
+  // Only parse from the first table's text to avoid duplicates
+  const firstTable = $('table').first();
+  const tableText = firstTable.text();
+
+  while ((match = componentPattern.exec(tableText)) !== null) {
+    const name = match[1];
+    const value = match[2];
+
+    // Skip "Current CIE" and "ATTENDANCE" — those aren't components
+    if (name.toLowerCase().includes('current') || name.toLowerCase().includes('attendance')) continue;
+
+    components.push({
+      name: name.toUpperCase(),
+      marksObtained: value === '-' || value === 'Abscent' ? null : parseInt(value),
+      maxMarks: null,
+    });
+  }
+
+  // Get credits from registration data
+  const regInfo = creditsMap.get(courseCode);
+  const credits = regInfo?.credits ?? 0;
+
+  return {
+    courseCode,
+    courseName,
+    credits,
+    nature: regInfo?.nature ?? 'Core',
+    cieMarks,
+    cieMax,
+    components,
+    attendance,
+    hasSEE: credits > 0,
+  };
 }
