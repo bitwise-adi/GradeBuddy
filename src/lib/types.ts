@@ -47,43 +47,6 @@ export interface StudentProfile {
   section: string;
 }
 
-/** Login step 1 credentials */
-export interface LoginCredentials {
-  usn: string;
-  dobDay: string;
-  dobMonth: string;
-  dobYear: string;
-}
-
-/** Login step 2 OTP verification */
-export interface OTPVerification {
-  verificationType: string;
-  digits: [string, string, string, string];
-}
-
-/** API response for login step 1 */
-export interface LoginResponse {
-  success: boolean;
-  message: string;
-  requiresOTP: boolean;
-  sessionId?: string;
-}
-
-/** API response for OTP verification */
-export interface VerifyResponse {
-  success: boolean;
-  message: string;
-  sessionId?: string;
-}
-
-/** API response for marks fetch */
-export interface MarksResponse {
-  success: boolean;
-  message: string;
-  profile?: StudentProfile;
-  courses?: Course[];
-}
-
 /** Grade requirement result */
 export interface GradeRequirement {
   grade: string;

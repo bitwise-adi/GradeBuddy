@@ -1,13 +1,9 @@
 'use client';
 
-import { useState } from 'react';
-import LoginForm from '@/components/LoginForm';
 import ManualEntry from '@/components/ManualEntry';
 import { GraduationCap } from 'lucide-react';
 
 export default function Home() {
-  const [mode, setMode] = useState<'login' | 'manual'>('login');
-
   return (
     <main className="login-page">
       <div className="login-hero animate-fade-in-up">
@@ -24,11 +20,7 @@ export default function Home() {
         <p>Know exactly what you need to score. Plan your grades, ace your semester.</p>
       </div>
 
-      {mode === 'login' ? (
-        <LoginForm onManualEntry={() => setMode('manual')} />
-      ) : (
-        <ManualEntry onBack={() => setMode('login')} />
-      )}
+      <ManualEntry />
 
       <p style={{
         marginTop: '2rem',
@@ -37,7 +29,7 @@ export default function Home() {
         textAlign: 'center',
         maxWidth: '400px',
       }}>
-        Built for NIE students. Your credentials are only used to fetch marks from the Contineo portal and are never stored.
+        Built for NIE students. Enter your CIE marks and see exactly what you need in your SEE to hit your target grade.
       </p>
     </main>
   );

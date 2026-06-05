@@ -5,11 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Plus, Trash2, ArrowRight, BookOpen } from 'lucide-react';
 import { Course } from '@/lib/types';
 
-interface ManualEntryProps {
-  onBack: () => void;
-}
-
-export default function ManualEntry({ onBack }: ManualEntryProps) {
+export default function ManualEntry() {
   const router = useRouter();
   const [courses, setCourses] = useState<Partial<Course>[]>([
     { courseCode: '', courseName: '', credits: 4, cieMarks: 0, cieMax: 100, hasSEE: true, nature: 'Core', components: [], attendance: null },
@@ -65,9 +61,9 @@ export default function ManualEntry({ onBack }: ManualEntryProps) {
       <form onSubmit={handleSubmit} className="animate-fade-in">
         <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
           <BookOpen size={28} color="var(--accent-primary)" style={{ marginBottom: '0.5rem' }} />
-          <h2 style={{ fontSize: '1.25rem', fontWeight: 700 }}>Manual Entry</h2>
+          <h2 style={{ fontSize: '1.25rem', fontWeight: 700 }}>Enter Your Courses</h2>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-            Enter your course details manually
+            Add your course details and CIE marks
           </p>
         </div>
 
@@ -186,12 +182,6 @@ export default function ManualEntry({ onBack }: ManualEntryProps) {
           <ArrowRight size={18} />
           Calculate Grades
         </button>
-
-        <div style={{ textAlign: 'center', marginTop: '1rem' }}>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={onBack}>
-            ← Back to Portal Login
-          </button>
-        </div>
       </form>
     </div>
   );

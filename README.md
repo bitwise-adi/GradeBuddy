@@ -1,36 +1,59 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# GradeBuddy 🎓
+
+**Know exactly what you need to score.** Plan your grades, ace your semester.
+
+Built for **NIE (National Institute of Engineering)** students using the VTU grading system.
+
+## Features
+
+- **📚 Course Entry** — Add your courses with CIE marks, credits, and max marks
+- **📊 Grade Calculator** — See exactly how many marks you need in SEE to hit each grade target (O, A+, A, B, C, P)
+- **🎯 GPA Simulator** — Select expected grades per course and see your predicted SGPA in real-time
+- **📈 Course Overview** — Visual cards with progress rings showing your CIE performance
+
+## How It Works
+
+1. Enter your courses (course code, name, credits, CIE marks)
+2. View the **Grade Calculator** tab to see required SEE marks for each grade
+3. Use the **GPA Simulator** to plan your target SGPA
+
+### Grade Scale (VTU)
+
+| Grade | GPA | Marks Range |
+|-------|-----|-------------|
+| O     | 10  | 90 – 100    |
+| A+    | 9   | 80 – 89     |
+| A     | 8   | 70 – 79     |
+| B     | 7   | 60 – 69     |
+| C     | 6   | 50 – 59     |
+| P     | 5   | 40 – 49     |
+| F     | 0   | 0 – 39      |
+
+## Tech Stack
+
+- **Next.js 16** with App Router
+- **React 19**
+- **Framer Motion** for animations
+- **Lucide React** for icons
+- Vanilla CSS with glassmorphism design
 
 ## Getting Started
 
-First, run the development server:
-
 ```bash
+# Install dependencies
+npm install
+
+# Run dev server
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) to start using GradeBuddy.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Branches
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- **`master`** — Manual entry mode (stable, deployed)
+- **`portal-fetch`** — Experimental auto-fetch from Contineo portal (work in progress)
 
-## Learn More
+## License
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+MIT
