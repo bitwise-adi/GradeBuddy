@@ -31,7 +31,7 @@ WORKDIR /app
 
 # Copy package files and install dependencies
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+RUN npm ci
 
 # Copy source code
 COPY . .
@@ -39,8 +39,9 @@ COPY . .
 # Build Next.js
 RUN npm run build
 
-# Expose port
+# Render assigns a dynamic PORT — Next.js needs to listen on it
+ENV PORT=3000
 EXPOSE 3000
 
-# Start the app
-CMD ["npm", "start"]
+# Start the app on the correct port
+CMD ["sh", "-c", "npx next start -p ${PORT}"]
