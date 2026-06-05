@@ -181,21 +181,23 @@ export async function loginAndFetchMarks(
     try {
       console.log('[Scraper] Fetching registration details via in-browser fetch...');
 
-      // Use in-browser fetch to get registration page (maintains session cookies automatically)
-      const regResult = await page.evaluate(async (loginUrl: string) => {
+      // Use in-browser fetch to get Student Registration page (maintains session cookies automatically)
+      // Path: REGISTRATION → Student Registration → course table with credits
+      const regResult = await page.evaluate(async (baseUrl: string) => {
         try {
           const res = await fetch(
-            `${loginUrl}?option=com_studentdashboard&controller=studentdashboard&task=getcoursedetails`,
+            `${baseUrl}/index.php?option=com_studregistration&controller=coursereg&task=courseRegvw`,
             { credentials: 'same-origin' }
           );
           return await res.text();
         } catch {
           return '';
         }
-      }, LOGIN_URL);
+      }, BASE_URL);
 
       if (regResult && !regResult.includes('Login to Your Account')) {
         const reg$ = cheerio.load(regResult);
+        // Table columns: COURSE CODE | SUBJECT NAME | CREDITS | NATURE | STATUS
         reg$('table tr').each(function () {
           const cells = reg$(this).find('td');
           if (cells.length >= 4) {
@@ -203,12 +205,15 @@ export async function loginAndFetchMarks(
             const credits = parseFloat(reg$(cells.eq(2)).text().trim()) || 0;
             const nature = reg$(cells.eq(3)).text().trim();
 
-            if (courseCode && /^[A-Z]/.test(courseCode)) {
+            if (courseCode && /^[A-Z]/.test(courseCode) && courseCode.length > 3) {
               creditsMap.set(courseCode, { credits, nature });
+              console.log(`  [Reg] ${courseCode}: ${credits} credits, ${nature}`);
             }
           }
         });
         console.log(`[Scraper] Found credits for ${creditsMap.size} courses`);
+      } else {
+        console.log('[Scraper] Registration page returned login page or empty');
       }
     } catch (err) {
       console.log('[Scraper] Could not fetch registration details:', err instanceof Error ? err.message : err);
@@ -304,19 +309,48 @@ export async function loginAndFetchMarks(
       }
     }
 
-    // Build profile
-    const profile: StudentProfile = {
-      name: '', // Portal shows proctor name, not student name
-      usn: usn.toUpperCase(),
-      branch: '',
-      semester: '',
-      section: '',
-    };
-
-    // Try to extract semester info from dashboard
+    // Build profile — extract from dashboard header
+    // Dashboard shows: student name in a heading, and "B.E-IS, SEM 06, SEC B" in the header area
     const bodyText = $('body').text();
-    const semMatch = bodyText.match(/SEM\s*(\d+)/i) || bodyText.match(/Semester\s*:\s*(\d+)/i);
-    if (semMatch) profile.semester = `SEM ${semMatch[1]}`;
+
+    // Extract student name (shown prominently on the dashboard, NOT the proctor name)
+    // The name appears as large text in the header area
+    let studentName = '';
+    $('h2, h3, h4, .cn-name, .student-name').each(function () {
+      const text = $(this).text().trim();
+      // Student name is usually all caps and 2-4 words
+      if (/^[A-Z][A-Z\s]{3,}$/.test(text) && !text.includes('NATIONAL') && !text.includes('ENGINEERING')) {
+        studentName = text;
+      }
+    });
+    // Fallback: search body text for name pattern near USN
+    if (!studentName) {
+      const nameMatch = bodyText.match(/([A-Z][A-Z\s]{3,})\s*4NI/i) ||
+                        bodyText.match(/([A-Z][A-Z\s]{3,})\s*Switch/i);
+      if (nameMatch) studentName = nameMatch[1].trim();
+    }
+
+    // Extract branch, semester, section from "B.E-IS, SEM 06, SEC B" format
+    let branch = '';
+    let semester = '';
+    let section = '';
+    const infoMatch = bodyText.match(/B\.?E[.-]\s*([A-Z]{2,4}),?\s*SEM\s*(\d+),?\s*SEC\s*([A-Z])/i);
+    if (infoMatch) {
+      branch = `B.E-${infoMatch[1]}`;
+      semester = `SEM ${infoMatch[2].padStart(2, '0')}`;
+      section = `SEC ${infoMatch[3]}`;
+    } else {
+      const semMatch = bodyText.match(/SEM\s*(\d+)/i);
+      if (semMatch) semester = `SEM ${semMatch[1].padStart(2, '0')}`;
+    }
+
+    const profile: StudentProfile = {
+      name: studentName,
+      usn: usn.toUpperCase(),
+      branch,
+      semester,
+      section,
+    };
 
     console.log(`[Scraper] Successfully fetched ${courses.length} courses`);
 
