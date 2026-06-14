@@ -18,6 +18,7 @@ import { Course, StudentProfile, CourseWithGPA } from '@/lib/types';
 import {
   GRADE_SCALE,
   calculateAllGradeRequirements,
+  calculateRequiredSEE,
   calculateSGPA,
   getGradeForMarks,
   calculateSGPARange,
@@ -513,10 +514,11 @@ export default function DashboardPage() {
 
           {/* Simulator Table */}
           <div className="glass-card" style={{ overflow: 'hidden' }}>
-            <div className="sim-row sim-row-header">
+            <div className="sim-row sim-row-header" style={{ gridTemplateColumns: '1fr 70px 80px 100px 130px' }}>
               <span>Course</span>
               <span style={{ textAlign: 'center' }}>Credits</span>
               <span style={{ textAlign: 'center' }}>CIE</span>
+              <span style={{ textAlign: 'center' }}>SEE Needed</span>
               <span style={{ textAlign: 'center' }}>Grade / GPA</span>
             </div>
 
@@ -524,14 +526,26 @@ export default function DashboardPage() {
               .filter(c => c.credits > 0)
               .map(course => {
                 const selectedGrade = GRADE_SCALE.find(g => g.gpa === course.selectedGPA);
+                const seeReq = calculateRequiredSEE(course.cieMarks, course.cieMax, course.selectedGPA);
                 return (
-                  <div key={course.courseCode} className="sim-row">
+                  <div key={course.courseCode} className="sim-row" style={{ gridTemplateColumns: '1fr 70px 80px 100px 130px' }}>
                     <div>
                       <div className="sim-course-name">{course.courseName || course.courseCode}</div>
                       <div className="sim-course-code">{course.courseCode}</div>
                     </div>
                     <div className="sim-credits">{course.credits}</div>
                     <div className="sim-cie">{course.cieMarks}/{course.cieMax}</div>
+                    <div style={{ textAlign: 'center', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <span className={`grade-cell ${seeReq.status}`} style={{ fontSize: '0.85rem', padding: '0.25rem 0.6rem' }}>
+                        {seeReq.status === 'guaranteed' ? (
+                          <><Star size={12} /> Any</>
+                        ) : seeReq.status === 'impossible' ? (
+                          '✗'
+                        ) : (
+                          `${seeReq.requiredSEE}+`
+                        )}
+                      </span>
+                    </div>
                     <div>
                       <select
                         className="gpa-select"

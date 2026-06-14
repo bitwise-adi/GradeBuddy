@@ -1,6 +1,11 @@
-import puppeteer, { Browser, Page } from 'puppeteer';
+import puppeteerExtra from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import { Browser, Page } from 'puppeteer';
 import * as cheerio from 'cheerio';
 import { Course, StudentProfile, CIEComponent } from './types';
+
+// Apply stealth plugin to avoid reCAPTCHA v3 bot detection (critical on Linux)
+puppeteerExtra.use(StealthPlugin());
 
 // ==============================
 // Puppeteer-based Portal Scraper
@@ -14,17 +19,17 @@ let browser: Browser | null = null;
 async function getBrowser(): Promise<Browser> {
   if (!browser || !browser.connected) {
     const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || undefined;
-    browser = await puppeteer.launch({
-      headless: true,
+    browser = await puppeteerExtra.launch({
+      headless: 'new',
       executablePath,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
         '--disable-gpu',
-        '--single-process',
+        '--window-size=1920,1080',
       ],
-    });
+    }) as unknown as Browser;
   }
   return browser;
 }
@@ -54,6 +59,7 @@ export async function loginAndFetchMarks(
   try {
     const b = await getBrowser();
     page = await b.newPage();
+    await page.setViewport({ width: 1920, height: 1080 });
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
     // ========== STEP 1: LOGIN ==========
@@ -121,7 +127,8 @@ export async function loginAndFetchMarks(
     }
 
     // Wait for reCAPTCHA v3 token to be generated (runs automatically on page load)
-    await new Promise(resolve => setTimeout(resolve, 3000));
+    // Longer wait improves reCAPTCHA score on Linux
+    await new Promise(resolve => setTimeout(resolve, 5000));
 
     // Call combineDigits() to populate the hidden enteredid field
     await page.evaluate(() => {
@@ -135,15 +142,62 @@ export async function loginAndFetchMarks(
     // Submit OTP form
     console.log('[Scraper] Submitting OTP form...');
     await Promise.all([
-      page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 15000 }),
+      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20000 }),
       page.click('input[type="submit"]'),
     ]);
 
-    // Check if login succeeded
-    const currentUrl = page.url();
-    const dashHtml = await page.content();
+    // The portal goes through intermediate redirect pages (ksign=... URL)
+    // Wait through multiple navigations until we reach the actual dashboard
+    let currentUrl = page.url();
+    let dashHtml = '';
+    let isLoggedIn = false;
+    const startTime = Date.now();
 
-    if (!currentUrl.includes('dashboard') || dashHtml.includes('Login to Your Account')) {
+    while (Date.now() - startTime < 20000) {
+      currentUrl = page.url();
+      dashHtml = await page.content();
+      const pageTextLower = dashHtml.replace(/<[^>]*>/g, ' ').toLowerCase();
+
+      // If we're back on login page, it failed
+      if (dashHtml.includes('Login to Your Account') || dashHtml.includes('Login Failed')) {
+        console.log('[Scraper] Detected login page — OTP failed');
+        break;
+      }
+
+      // Check for dashboard indicators
+      const hasLogout = pageTextLower.includes('logout');
+      const hasDashboard = currentUrl.toLowerCase().includes('dashboard');
+      const hasWelcome = pageTextLower.includes('welcome');
+      const hasStudentName = pageTextLower.includes(usn.toLowerCase());
+      const hasCourseTable = pageTextLower.includes('course') || pageTextLower.includes('cie');
+
+      if (hasLogout || hasDashboard || hasWelcome || hasStudentName || hasCourseTable) {
+        console.log('[Scraper] Dashboard reached:', { hasLogout, hasDashboard, hasWelcome, hasStudentName, hasCourseTable });
+        isLoggedIn = true;
+        break;
+      }
+
+      // Still on intermediate page, wait for next navigation
+      console.log('[Scraper] On intermediate page, waiting for redirect... URL:', currentUrl);
+      try {
+        await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 8000 });
+      } catch {
+        // Timeout — maybe the page used a JS redirect that already happened
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        // Check one more time after settling
+        currentUrl = page.url();
+        dashHtml = await page.content();
+        const finalText = dashHtml.replace(/<[^>]*>/g, ' ').toLowerCase();
+        if (finalText.includes('logout') || currentUrl.toLowerCase().includes('dashboard') || finalText.includes(usn.toLowerCase())) {
+          isLoggedIn = true;
+        }
+        break;
+      }
+    }
+
+    console.log('[Scraper] Final URL:', currentUrl, '| Logged in:', isLoggedIn);
+
+    if (!isLoggedIn) {
       return { success: false, message: 'OTP verification failed. Please check your verification digits.' };
     }
 
