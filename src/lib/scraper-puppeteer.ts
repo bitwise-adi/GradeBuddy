@@ -20,7 +20,7 @@ async function getBrowser(): Promise<Browser> {
   if (!browser || !browser.connected) {
     const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || undefined;
     browser = await puppeteerExtra.launch({
-      headless: 'new',
+      headless: true,
       executablePath,
       args: [
         '--no-sandbox',
