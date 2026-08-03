@@ -10,7 +10,9 @@ This branch (**`portal-fetch`**) contains the **Full Automated Scraping** versio
 ![Puppeteer](https://img.shields.io/badge/Puppeteer-40B5A4?style=for-the-badge&logo=Puppeteer&logoColor=white)
 
 ---
-
+## 🌐 Live Link 
+>[Click Here](https://gradebuddy.bitwise-adi.dev/)
+---
 ## ✨ Features
 
 - **🚀 One-Click Fetching**: Just enter your USN and DOB. GradeBuddy automatically logs into the portal and fetches your data.
