@@ -136,7 +136,7 @@ export default function DashboardPage() {
           </p>
           <ul style={{ textAlign: 'left', color: 'var(--text-secondary)', marginBottom: '1.5rem', lineHeight: '1.8' }}>
             <li>The session authentication failed</li>
-            <li>The CIE data isn't available yet in the portal</li>
+            <li>The CIE data isn&apos;t available yet in the portal</li>
             <li>The portal structure has changed</li>
           </ul>
           <div style={{ display: 'flex', gap: '1rem', flexDirection: 'column' }}>
